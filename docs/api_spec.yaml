@@ -1,0 +1,455 @@
+openapi: "3.0.3"
+info:
+  title: Distributed Synchronization System API
+  description: |
+    API untuk Distributed Synchronization System yang mengimplementasikan:
+    - Distributed Lock Manager (Raft Consensus + Deadlock Detection)
+    - Distributed Queue (Consistent Hashing + At-least-once delivery)
+    - MESI Cache Coherence Protocol (LRU replacement)
+    - PBFT Byzantine Fault Tolerance (Bonus A)
+    - JWT Authentication + RBAC + Audit Logging (Bonus D)
+  version: "1.0.0"
+  contact:
+    name: Distributed Systems - Tugas 2
+
+servers:
+  - url: http://localhost:8001
+    description: Node 1 (default)
+  - url: http://localhost:8002
+    description: Node 2
+  - url: http://localhost:8003
+    description: Node 3
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LockAcquireRequest:
+      type: object
+      required: [resource, owner]
+      properties:
+        resource:
+          type: string
+          example: "database-shard-1"
+          description: Identifier resource yang ingin di-lock
+        lock_type:
+          type: string
+          enum: [shared, exclusive]
+          default: exclusive
+          description: "shared = multiple readers; exclusive = single writer"
+        owner:
+          type: string
+          example: "process-A"
+          description: Identifier pemilik lock
+        timeout:
+          type: number
+          default: 30.0
+          description: Auto-release timeout dalam detik
+        wait:
+          type: boolean
+          default: true
+          description: Apakah menunggu jika lock tidak tersedia
+
+    LockResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [granted, waiting, denied, deadlock]
+        lock_id:
+          type: string
+        resource:
+          type: string
+        lock_type:
+          type: string
+
+    ProduceRequest:
+      type: object
+      required: [queue_name, payload]
+      properties:
+        queue_name:
+          type: string
+          example: "orders"
+        payload:
+          type: object
+        producer_id:
+          type: string
+          default: "default"
+
+    CacheWriteRequest:
+      type: object
+      required: [key, value]
+      properties:
+        key:
+          type: string
+          example: "user:123"
+        value:
+          description: "Any JSON value"
+
+    LoginRequest:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+          example: "admin-user"
+        role:
+          type: string
+          enum: [admin, producer, consumer, reader]
+          default: reader
+
+    RaftStatus:
+      type: object
+      properties:
+        node_id:
+          type: string
+        role:
+          type: string
+          enum: [follower, candidate, leader]
+        term:
+          type: integer
+        leader_id:
+          type: string
+          nullable: true
+        log_size:
+          type: integer
+        commit_index:
+          type: integer
+
+paths:
+  /health:
+    get:
+      summary: Health Check
+      tags: [System]
+      responses:
+        "200":
+          description: Node is alive
+          content:
+            application/json:
+              example:
+                status: ok
+                node_id: node1
+                timestamp: 1714650000.0
+
+  /status:
+    get:
+      summary: Full Node Status
+      tags: [System]
+      description: Returns status of all components (Raft, PBFT, locks, cache, queue, peers)
+      responses:
+        "200":
+          description: Complete node status
+
+  /raft/status:
+    get:
+      summary: Raft Consensus Status
+      tags: [Raft]
+      responses:
+        "200":
+          description: Current Raft state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RaftStatus"
+
+  /lock/acquire:
+    post:
+      summary: Acquire Distributed Lock
+      tags: [Lock Manager]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LockAcquireRequest"
+            examples:
+              exclusive:
+                value:
+                  resource: "order-service-db"
+                  lock_type: "exclusive"
+                  owner: "worker-1"
+                  timeout: 30
+                  wait: false
+              shared:
+                value:
+                  resource: "config-file"
+                  lock_type: "shared"
+                  owner: "reader-A"
+      responses:
+        "200":
+          description: Lock acquisition result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockResponse"
+        "403":
+          description: Permission denied
+
+  /lock/release:
+    post:
+      summary: Release Distributed Lock
+      tags: [Lock Manager]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lock_id, owner]
+              properties:
+                lock_id:
+                  type: string
+                owner:
+                  type: string
+      responses:
+        "200":
+          description: Lock released
+
+  /lock/status:
+    get:
+      summary: Get Active Locks
+      tags: [Lock Manager]
+      description: Returns all active locks and Resource Allocation Graph
+      responses:
+        "200":
+          description: Lock status
+
+  /queue/produce:
+    post:
+      summary: Produce Message
+      tags: [Queue]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProduceRequest"
+            example:
+              queue_name: "orders"
+              payload:
+                order_id: "ORD-001"
+                amount: 150.00
+              producer_id: "shop-service"
+      responses:
+        "200":
+          description: Message produced
+          content:
+            application/json:
+              example:
+                message_id: "550e8400-e29b-41d4-a716-446655440000"
+                queue_name: "orders"
+
+  /queue/consume:
+    get:
+      summary: Consume Message (blocking)
+      tags: [Queue]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: queue_name
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: consumer_id
+          in: query
+          schema:
+            type: string
+            default: consumer1
+        - name: timeout
+          in: query
+          schema:
+            type: number
+            default: 5.0
+      responses:
+        "200":
+          description: Message (null if timeout)
+
+  /queue/ack:
+    post:
+      summary: Acknowledge Message
+      tags: [Queue]
+      responses:
+        "200":
+          description: Message acknowledged
+
+  /queue/stats:
+    get:
+      summary: Queue Statistics
+      tags: [Queue]
+      parameters:
+        - name: queue_name
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Queue stats including pending count and responsible node
+
+  /cache/read:
+    get:
+      summary: Read from MESI Cache
+      tags: [Cache (MESI)]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cache read result
+          content:
+            application/json:
+              example:
+                key: "user:123"
+                value:
+                  name: Alice
+                found: true
+
+  /cache/write:
+    post:
+      summary: Write to MESI Cache
+      tags: [Cache (MESI)]
+      description: |
+        Writes a value and broadcasts INVALIDATE to all peer caches.
+        The writing node's state becomes Modified (M).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CacheWriteRequest"
+      responses:
+        "200":
+          description: Write successful
+          content:
+            application/json:
+              example:
+                key: "user:123"
+                success: true
+                state: M
+
+  /cache/status:
+    get:
+      summary: Cache Status
+      tags: [Cache (MESI)]
+      description: Returns size, utilization, and MESI state distribution
+      responses:
+        "200":
+          description: Cache status
+
+  /pbft/request:
+    post:
+      summary: Submit PBFT Request (Byzantine Fault Tolerant)
+      tags: [PBFT (Bonus)]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              command:
+                action: "SET_CONFIG"
+                key: "max_connections"
+                value: 100
+      responses:
+        "200":
+          description: PBFT consensus result
+
+  /pbft/status:
+    get:
+      summary: PBFT Node Status
+      tags: [PBFT (Bonus)]
+      responses:
+        "200":
+          description: PBFT status including primary, view, sequence number
+
+  /auth/login:
+    post:
+      summary: Login (Get JWT Token)
+      tags: [Security (Bonus D)]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: JWT token
+          content:
+            application/json:
+              example:
+                access_token: "eyJhbGci..."
+                token_type: bearer
+                role: admin
+                permissions: ["admin:all", "lock:acquire", "..."]
+
+  /auth/demo-tokens:
+    get:
+      summary: Get Demo Tokens (All Roles)
+      tags: [Security (Bonus D)]
+      description: Returns ready-to-use JWT tokens for each role (for testing only)
+      responses:
+        "200":
+          description: Demo tokens for admin, producer, consumer, reader, node
+
+  /auth/audit-log:
+    get:
+      summary: Get Audit Log (Admin Only)
+      tags: [Security (Bonus D)]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Tamper-proof audit log entries
+        "403":
+          description: Admin role required
+
+  /demo/scenario/lock-deadlock:
+    get:
+      summary: Demo - Deadlock Scenario
+      tags: [Demo]
+      description: Simulates a deadlock between two processes and shows detection
+      responses:
+        "200":
+          description: Step-by-step deadlock scenario result
+
+  /demo/scenario/cache-mesi:
+    get:
+      summary: Demo - MESI State Transitions
+      tags: [Demo]
+      responses:
+        "200":
+          description: MESI state transitions demo
+
+  /demo/scenario/queue-flow:
+    get:
+      summary: Demo - Queue Produce/Consume/Ack Flow
+      tags: [Demo]
+      responses:
+        "200":
+          description: Complete queue flow demo

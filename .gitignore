@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+htmlcov/
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+certs/
+benchmarks/results/
+*.zip
