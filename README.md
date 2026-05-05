@@ -198,7 +198,7 @@ distributed-sync-system/
 
 ## Video Demo
 
-🎬 **Link YouTube**: [INSERT YOUTUBE LINK HERE]
+🎬 **Link YouTube**: https://youtu.be/rh8xOmxW0WQ?si=VK3_jM_O4n6HIis2
 
 Struktur video (10-15 menit):
 1. Pendahuluan dan tujuan (1-2 menit)
