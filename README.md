@@ -237,7 +237,7 @@ Struktur video (10-15 menit):
 
 ## Identitas
 
-- **Nama**: [NAMA MAHASISWA]
-- **NIM**: [NIM]
+- **Nama**: Rafly Taufika Fikri
+- **NIM**: 11231083
 - **Mata Kuliah**: Sistem Parallel dan Terdistribusi
 - **Tahun**: 2026
